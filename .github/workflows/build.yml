@@ -16,4 +16,24 @@ jobs:
 
       - name: Build Project
         run: |
-          xcodebuild build -project bad_query.xcodeproj -target bad_query -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=
+          xcodebuild build \
+            -project bad_query.xcodeproj \
+            -target bad_query \
+            -sdk iphoneos \
+            -configuration Release \
+            CONFIGURATION_BUILD_DIR=$PWD/build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=
+
+      - name: Package IPA
+        run: |
+          mkdir Payload
+          mv build/bad_query.app Payload/
+          zip -qr bad_query.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bad_query-app
+          path: bad_query.ipa
