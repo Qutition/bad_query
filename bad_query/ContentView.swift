@@ -81,15 +81,21 @@ struct ContentView: View {
         
         log.append("\nattempting consume sandbox extension...")
         let handle = bad_query(&pathC, false, nil, false)
+        let diagnostic = String(cString: bad_query_last_error())
+        log.append("\nresult: \(handle)\ndiagnostic: \(diagnostic)")
         switch handle {
         case -1:
             log.append("\nfailed to resolve one or more functions")
         case -2:
             log.append("\nfailed to create sandbox query")
-        case -3:
-            log.append("\noutside of containermanager's sandbox")
         case -4:
-            log.append("\nkernel rejected sandbox query")
+            log.append("\ntoken was not issued by Container Manager")
+        case -254:
+            log.append("\npath check failed (file may be missing or inaccessible)")
+        case -255:
+            log.append("\npath must be an absolute path")
+        case -5:
+            log.append("\nfailed to construct query path")
         default:
             log.append("\nsuccess! handle: \(handle)")
         }
