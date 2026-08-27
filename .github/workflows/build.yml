@@ -12,8 +12,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: List Available Xcodes
-        run: ls -d /Applications/Xcode*
+      - name: Select Latest Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_26.6.app
 
       - name: Build Target
         run: |
