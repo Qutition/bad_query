@@ -12,6 +12,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: List Available Xcodes
+        run: ls -d /Applications/Xcode*
+
       - name: Build Target
         run: |
           xcodebuild build \
